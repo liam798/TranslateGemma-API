@@ -22,14 +22,15 @@ transformers_logging.set_verbosity_error()
 MODEL_DIR = os.environ.get("TRANSLATE_GEMMA_MODEL_DIR", "/data/translate-gemma/model")
 API_KEY = os.environ.get("TRANSLATE_GEMMA_API_KEY", "")
 MAX_NEW_TOKENS = int(os.environ.get("TRANSLATE_GEMMA_MAX_NEW_TOKENS", "2048"))
-CHUNK_CHARS = int(os.environ.get("TRANSLATE_GEMMA_CHUNK_CHARS", "900"))
-CHUNK_MAX_NEW_TOKENS = int(os.environ.get("TRANSLATE_GEMMA_CHUNK_MAX_NEW_TOKENS", "768"))
+CHUNK_CHARS = int(os.environ.get("TRANSLATE_GEMMA_CHUNK_CHARS", "1800"))
+CHUNK_MAX_NEW_TOKENS = int(os.environ.get("TRANSLATE_GEMMA_CHUNK_MAX_NEW_TOKENS", "512"))
 MAX_BATCH_SIZE = int(os.environ.get("TRANSLATE_GEMMA_MAX_BATCH_SIZE", "4"))
 LONG_BATCH_SIZE = int(os.environ.get("TRANSLATE_GEMMA_LONG_BATCH_SIZE", "2"))
 LOCK_WAIT_SECONDS = float(os.environ.get("TRANSLATE_GEMMA_LOCK_WAIT_SECONDS", "3"))
 BATCH_WAIT_SECONDS = float(os.environ.get("TRANSLATE_GEMMA_BATCH_WAIT_SECONDS", "0.02"))
 BATCH_MIN_WAIT_SECONDS = float(os.environ.get("TRANSLATE_GEMMA_BATCH_MIN_WAIT_SECONDS", "0.005"))
 BATCH_MAX_CHARS = int(os.environ.get("TRANSLATE_GEMMA_BATCH_MAX_CHARS", "6000"))
+LONG_JOB_PROMOTE_SECONDS = float(os.environ.get("TRANSLATE_GEMMA_LONG_JOB_PROMOTE_SECONDS", "3"))
 QUEUE_MAX_SIZE = int(os.environ.get("TRANSLATE_GEMMA_QUEUE_MAX_SIZE", "256"))
 QUEUE_RESULT_TIMEOUT_SECONDS = float(os.environ.get("TRANSLATE_GEMMA_QUEUE_RESULT_TIMEOUT_SECONDS", "120"))
 
@@ -381,6 +382,13 @@ def bucket_priority(bucket: str) -> int:
     return 2
 
 
+def job_priority(job: TranslationJob) -> int:
+    bucket = length_bucket(job.text)
+    if bucket == "long" and time.monotonic() - job.created_at >= LONG_JOB_PROMOTE_SECONDS:
+        return 0
+    return bucket_priority(bucket)
+
+
 def batch_key(job: TranslationJob) -> Tuple[str, str, str]:
     return job.source, job.target, length_bucket(job.text)
 
@@ -402,9 +410,9 @@ def drain_ready_jobs(pending_jobs: Deque[TranslationJob], wait_seconds: float = 
 
 def pop_next_pending(pending_jobs: Deque[TranslationJob]) -> TranslationJob:
     best_index = 0
-    best_score: Tuple[int, float] = (bucket_priority(length_bucket(pending_jobs[0].text)), pending_jobs[0].created_at)
+    best_score: Tuple[int, float] = (job_priority(pending_jobs[0]), pending_jobs[0].created_at)
     for index, job in enumerate(pending_jobs):
-        score = (bucket_priority(length_bucket(job.text)), job.created_at)
+        score = (job_priority(job), job.created_at)
         if score < best_score:
             best_index = index
             best_score = score

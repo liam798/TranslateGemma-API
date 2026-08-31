@@ -264,14 +264,15 @@ Authorization: Bearer <key>
 | `TRANSLATE_GEMMA_MODEL_DIR` | `/data/translate-gemma/model` | 模型目录 |
 | `TRANSLATE_GEMMA_API_KEY` | 空 | 服务端 API Key |
 | `TRANSLATE_GEMMA_MAX_NEW_TOKENS` | `2048` | 单次最大生成 token |
-| `TRANSLATE_GEMMA_CHUNK_CHARS` | `900` | 长文本切块字符数 |
-| `TRANSLATE_GEMMA_CHUNK_MAX_NEW_TOKENS` | `768` | 单块生成 token 上限 |
+| `TRANSLATE_GEMMA_CHUNK_CHARS` | `1800` | 长文本切块字符数 |
+| `TRANSLATE_GEMMA_CHUNK_MAX_NEW_TOKENS` | `512` | 单块生成 token 上限 |
 | `TRANSLATE_GEMMA_MAX_BATCH_SIZE` | `24` | 最大 batch 条数 |
-| `TRANSLATE_GEMMA_LONG_BATCH_SIZE` | `4` | 长文本切块 batch 上限 |
+| `TRANSLATE_GEMMA_LONG_BATCH_SIZE` | `3` | 长文本切块 batch 上限 |
 | `TRANSLATE_GEMMA_LOCK_WAIT_SECONDS` | `60` | 入队等待时间 |
 | `TRANSLATE_GEMMA_BATCH_WAIT_SECONDS` | `0.08` | 普通 batch 聚合等待时间 |
 | `TRANSLATE_GEMMA_BATCH_MIN_WAIT_SECONDS` | `0.005` | 高压力或长文本最小等待时间 |
 | `TRANSLATE_GEMMA_BATCH_MAX_CHARS` | `6000` | 单批最大字符数 |
+| `TRANSLATE_GEMMA_LONG_JOB_PROMOTE_SECONDS` | `3` | 长文本等待超过该秒数后提升调度优先级 |
 | `TRANSLATE_GEMMA_QUEUE_MAX_SIZE` | `256` | 队列最大任务数 |
 | `TRANSLATE_GEMMA_QUEUE_RESULT_TIMEOUT_SECONDS` | `180` | 请求等待结果超时 |
 
