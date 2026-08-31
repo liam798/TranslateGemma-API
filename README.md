@@ -257,6 +257,15 @@ Authorization: Bearer <key>
 
 这样可以减少多请求下的单条推理开销，并避免长文本拖慢短文本。
 
+调度分桶和切块阈值是两套逻辑：
+
+| 字符数 | 调度分桶 | 是否切块 |
+| ---: | --- | --- |
+| `0-255` | `short` | 否 |
+| `256-1024` | `medium` | 否 |
+| `1025-1800` | `long` | 否 |
+| `1801+` | `long` | 是 |
+
 ## 配置项
 
 | 配置 | 默认值 | 说明 |
@@ -272,6 +281,8 @@ Authorization: Bearer <key>
 | `TRANSLATE_GEMMA_BATCH_WAIT_SECONDS` | `0.08` | 普通 batch 聚合等待时间 |
 | `TRANSLATE_GEMMA_BATCH_MIN_WAIT_SECONDS` | `0.005` | 高压力或长文本最小等待时间 |
 | `TRANSLATE_GEMMA_BATCH_MAX_CHARS` | `6000` | 单批最大字符数 |
+| `TRANSLATE_GEMMA_SHORT_TEXT_CHARS` | `255` | 调度短文本上限 |
+| `TRANSLATE_GEMMA_MEDIUM_TEXT_CHARS` | `1024` | 调度中文本上限 |
 | `TRANSLATE_GEMMA_LONG_JOB_PROMOTE_SECONDS` | `3` | 长文本等待超过该秒数后提升调度优先级 |
 | `TRANSLATE_GEMMA_QUEUE_MAX_SIZE` | `256` | 队列最大任务数 |
 | `TRANSLATE_GEMMA_QUEUE_RESULT_TIMEOUT_SECONDS` | `180` | 请求等待结果超时 |

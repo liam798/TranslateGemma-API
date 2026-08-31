@@ -30,6 +30,8 @@ LOCK_WAIT_SECONDS = float(os.environ.get("TRANSLATE_GEMMA_LOCK_WAIT_SECONDS", "3
 BATCH_WAIT_SECONDS = float(os.environ.get("TRANSLATE_GEMMA_BATCH_WAIT_SECONDS", "0.02"))
 BATCH_MIN_WAIT_SECONDS = float(os.environ.get("TRANSLATE_GEMMA_BATCH_MIN_WAIT_SECONDS", "0.005"))
 BATCH_MAX_CHARS = int(os.environ.get("TRANSLATE_GEMMA_BATCH_MAX_CHARS", "6000"))
+SHORT_TEXT_CHARS = int(os.environ.get("TRANSLATE_GEMMA_SHORT_TEXT_CHARS", "255"))
+MEDIUM_TEXT_CHARS = int(os.environ.get("TRANSLATE_GEMMA_MEDIUM_TEXT_CHARS", "1024"))
 LONG_JOB_PROMOTE_SECONDS = float(os.environ.get("TRANSLATE_GEMMA_LONG_JOB_PROMOTE_SECONDS", "3"))
 QUEUE_MAX_SIZE = int(os.environ.get("TRANSLATE_GEMMA_QUEUE_MAX_SIZE", "256"))
 QUEUE_RESULT_TIMEOUT_SECONDS = float(os.environ.get("TRANSLATE_GEMMA_QUEUE_RESULT_TIMEOUT_SECONDS", "120"))
@@ -367,9 +369,9 @@ def start_batch_worker() -> None:
 
 def length_bucket(text: str) -> str:
     size = len(text)
-    if size <= 200:
+    if size <= SHORT_TEXT_CHARS:
         return "short"
-    if size <= CHUNK_CHARS:
+    if size <= MEDIUM_TEXT_CHARS:
         return "medium"
     return "long"
 
@@ -385,7 +387,7 @@ def bucket_priority(bucket: str) -> int:
 def job_priority(job: TranslationJob) -> int:
     bucket = length_bucket(job.text)
     if bucket == "long" and time.monotonic() - job.created_at >= LONG_JOB_PROMOTE_SECONDS:
-        return 0
+        return 1
     return bucket_priority(bucket)
 
 
