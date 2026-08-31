@@ -11,7 +11,9 @@
 - 4bit 量化加载，降低显存占用
 - 单 GPU 推理锁，避免并发 generate 冲突
 - 跨请求动态合批，提高 GPU 利用率
+- 按语言方向和文本长度分桶合批，降低混合流量下的长尾延迟
 - 长文本切块翻译
+- `/metrics` 运行指标
 - `detectedSourceLanguage` 返回
 - URL、`{{变量}}`、`<标签>` 保护与恢复
 - systemd 自启动模板
@@ -75,6 +77,12 @@ systemctl enable --now translate-gemma.service
 
 ```bash
 curl http://127.0.0.1:8000/health
+```
+
+运行指标：
+
+```bash
+curl http://127.0.0.1:8000/metrics
 ```
 
 ## Google v2 风格接口
@@ -146,8 +154,9 @@ curl -X POST http://127.0.0.1:8000/language/translate/v2 \
 
 核心参数：
 
-- `TRANSLATE_GEMMA_MAX_BATCH_SIZE`：短文本动态合批上限，默认 `16`
-- `TRANSLATE_GEMMA_BATCH_WAIT_SECONDS`：等待同一波请求进入 batch 的时间，默认 `0.05`
+- `TRANSLATE_GEMMA_MAX_BATCH_SIZE`：短文本动态合批上限，默认 `24`
+- `TRANSLATE_GEMMA_BATCH_WAIT_SECONDS`：等待同一波请求进入 batch 的时间，默认 `0.08`
+- `TRANSLATE_GEMMA_BATCH_MIN_WAIT_SECONDS`：高队列压力或长文本的最小等待时间，默认 `0.005`
 - `TRANSLATE_GEMMA_BATCH_MAX_CHARS`：单个 batch 最大总字符数，默认 `6000`
 - `TRANSLATE_GEMMA_LONG_BATCH_SIZE`：长文本切块后的批量上限，默认 `4`
 - `TRANSLATE_GEMMA_QUEUE_RESULT_TIMEOUT_SECONDS`：请求等待队列结果的超时时间，默认 `180`

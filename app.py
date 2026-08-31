@@ -5,8 +5,9 @@ import queue
 import re
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Deque, Dict, List, Optional, Tuple, Union
 
 import torch
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -27,6 +28,7 @@ MAX_BATCH_SIZE = int(os.environ.get("TRANSLATE_GEMMA_MAX_BATCH_SIZE", "4"))
 LONG_BATCH_SIZE = int(os.environ.get("TRANSLATE_GEMMA_LONG_BATCH_SIZE", "2"))
 LOCK_WAIT_SECONDS = float(os.environ.get("TRANSLATE_GEMMA_LOCK_WAIT_SECONDS", "3"))
 BATCH_WAIT_SECONDS = float(os.environ.get("TRANSLATE_GEMMA_BATCH_WAIT_SECONDS", "0.02"))
+BATCH_MIN_WAIT_SECONDS = float(os.environ.get("TRANSLATE_GEMMA_BATCH_MIN_WAIT_SECONDS", "0.005"))
 BATCH_MAX_CHARS = int(os.environ.get("TRANSLATE_GEMMA_BATCH_MAX_CHARS", "6000"))
 QUEUE_MAX_SIZE = int(os.environ.get("TRANSLATE_GEMMA_QUEUE_MAX_SIZE", "256"))
 QUEUE_RESULT_TIMEOUT_SECONDS = float(os.environ.get("TRANSLATE_GEMMA_QUEUE_RESULT_TIMEOUT_SECONDS", "120"))
@@ -74,6 +76,18 @@ model = None
 generate_lock = threading.Lock()
 worker_started = False
 worker_local = threading.local()
+stats_lock = threading.Lock()
+stats: Dict[str, Union[int, float]] = {
+    "requests_total": 0,
+    "jobs_total": 0,
+    "batches_total": 0,
+    "batch_items_total": 0,
+    "batch_chars_total": 0,
+    "generate_seconds_total": 0.0,
+    "errors_total": 0,
+    "queue_full_total": 0,
+    "queue_timeout_total": 0,
+}
 
 
 @dataclass
@@ -82,9 +96,22 @@ class TranslationJob:
     source: str
     target: str
     future: concurrent.futures.Future
+    created_at: float
 
 
 translation_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
+
+
+def increment_stat(name: str, amount: Union[int, float] = 1) -> None:
+    with stats_lock:
+        stats[name] = stats.get(name, 0) + amount
+
+
+def snapshot_stats() -> Dict[str, Union[int, float]]:
+    with stats_lock:
+        current = dict(stats)
+    current["queue_size"] = translation_queue.qsize()
+    return current
 
 
 def normalize_lang(code: str) -> str:
@@ -212,6 +239,21 @@ def health() -> Dict[str, str]:
     return {"status": "ok", "model": "google/translategemma-4b-it"}
 
 
+@app.get("/metrics")
+def metrics() -> Dict[str, Union[int, float]]:
+    current = snapshot_stats()
+    batches = int(current.get("batches_total", 0))
+    if batches:
+        current["batch_items_avg"] = round(float(current.get("batch_items_total", 0)) / batches, 3)
+        current["batch_chars_avg"] = round(float(current.get("batch_chars_total", 0)) / batches, 3)
+        current["generate_seconds_avg"] = round(float(current.get("generate_seconds_total", 0.0)) / batches, 3)
+    else:
+        current["batch_items_avg"] = 0
+        current["batch_chars_avg"] = 0
+        current["generate_seconds_avg"] = 0
+    return current
+
+
 @app.get("/languages")
 def languages() -> List[Dict[str, object]]:
     codes = sorted(SUPPORTED_LANGUAGES)
@@ -322,70 +364,153 @@ def start_batch_worker() -> None:
     thread.start()
 
 
-def collect_batch(first_job: TranslationJob) -> Tuple[List[TranslationJob], Optional[TranslationJob]]:
-    jobs = [first_job]
-    batch_chars = len(first_job.text)
-    deferred_job = None
-    deadline = time.monotonic() + BATCH_WAIT_SECONDS
-    while len(jobs) < MAX_BATCH_SIZE:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
+def length_bucket(text: str) -> str:
+    size = len(text)
+    if size <= 200:
+        return "short"
+    if size <= CHUNK_CHARS:
+        return "medium"
+    return "long"
+
+
+def bucket_priority(bucket: str) -> int:
+    if bucket == "short":
+        return 0
+    if bucket == "medium":
+        return 1
+    return 2
+
+
+def batch_key(job: TranslationJob) -> Tuple[str, str, str]:
+    return job.source, job.target, length_bucket(job.text)
+
+
+def drain_ready_jobs(pending_jobs: Deque[TranslationJob], wait_seconds: float = 0.0) -> None:
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        timeout = max(0.0, deadline - time.monotonic())
         try:
-            next_job = translation_queue.get(timeout=remaining)
+            if timeout > 0:
+                pending_jobs.append(translation_queue.get(timeout=timeout))
+            else:
+                pending_jobs.append(translation_queue.get_nowait())
         except queue.Empty:
             break
-        if batch_chars + len(next_job.text) > BATCH_MAX_CHARS and jobs:
-            deferred_job = next_job
-            break
+        if timeout <= 0:
+            continue
+
+
+def pop_next_pending(pending_jobs: Deque[TranslationJob]) -> TranslationJob:
+    best_index = 0
+    best_score: Tuple[int, float] = (bucket_priority(length_bucket(pending_jobs[0].text)), pending_jobs[0].created_at)
+    for index, job in enumerate(pending_jobs):
+        score = (bucket_priority(length_bucket(job.text)), job.created_at)
+        if score < best_score:
+            best_index = index
+            best_score = score
+
+    for _ in range(best_index):
+        pending_jobs.append(pending_jobs.popleft())
+    return pending_jobs.popleft()
+
+
+def choose_batch_wait(first_job: TranslationJob, pending_count: int) -> float:
+    queued_count = translation_queue.qsize() + pending_count
+    if queued_count >= MAX_BATCH_SIZE:
+        return BATCH_MIN_WAIT_SECONDS
+    if length_bucket(first_job.text) == "long":
+        return BATCH_MIN_WAIT_SECONDS
+    return BATCH_WAIT_SECONDS
+
+
+def pop_compatible_pending(
+    pending_jobs: Deque[TranslationJob],
+    key: Tuple[str, str, str],
+    batch_chars: int,
+) -> Optional[TranslationJob]:
+    for _ in range(len(pending_jobs)):
+        job = pending_jobs.popleft()
+        if batch_key(job) == key and batch_chars + len(job.text) <= BATCH_MAX_CHARS:
+            return job
+        pending_jobs.append(job)
+    return None
+
+
+def collect_batch(first_job: TranslationJob, pending_jobs: Deque[TranslationJob]) -> List[TranslationJob]:
+    jobs = [first_job]
+    batch_chars = len(first_job.text)
+    key = batch_key(first_job)
+    deadline = time.monotonic() + choose_batch_wait(first_job, len(pending_jobs))
+    while len(jobs) < MAX_BATCH_SIZE:
+        next_job = pop_compatible_pending(pending_jobs, key, batch_chars)
+        if next_job is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                next_job = translation_queue.get(timeout=remaining)
+            except queue.Empty:
+                break
+            if batch_key(next_job) != key or batch_chars + len(next_job.text) > BATCH_MAX_CHARS:
+                pending_jobs.append(next_job)
+                continue
         jobs.append(next_job)
         batch_chars += len(next_job.text)
-    return jobs, deferred_job
+    return jobs
 
 
 def batch_worker_loop() -> None:
     worker_local.in_worker = True
-    deferred_job: Optional[TranslationJob] = None
+    pending_jobs: Deque[TranslationJob] = deque()
     while True:
-        if deferred_job is None:
-            first_job = translation_queue.get()
+        if not pending_jobs:
+            pending_jobs.append(translation_queue.get())
+            drain_ready_jobs(pending_jobs, BATCH_MIN_WAIT_SECONDS)
         else:
-            first_job = deferred_job
-            deferred_job = None
-        jobs, deferred_job = collect_batch(first_job)
-        grouped: Dict[Tuple[str, str], List[TranslationJob]] = {}
-        for job in jobs:
-            grouped.setdefault((job.source, job.target), []).append(job)
-
-        for (source, target), group in grouped.items():
-            try:
-                results = translate_batch_direct([job.text for job in group], source, target)
-                for job, result in zip(group, results):
-                    job.future.set_result(result)
-            except Exception as exc:
-                for job in group:
-                    job.future.set_exception(exc)
-            finally:
-                for _ in group:
-                    translation_queue.task_done()
+            drain_ready_jobs(pending_jobs)
+        first_job = pop_next_pending(pending_jobs)
+        jobs = collect_batch(first_job, pending_jobs)
+        source, target, _ = batch_key(first_job)
+        start_time = time.monotonic()
+        try:
+            results = translate_batch_direct([job.text for job in jobs], source, target)
+            elapsed = time.monotonic() - start_time
+            with stats_lock:
+                stats["batches_total"] = stats.get("batches_total", 0) + 1
+                stats["batch_items_total"] = stats.get("batch_items_total", 0) + len(jobs)
+                stats["batch_chars_total"] = stats.get("batch_chars_total", 0) + sum(len(job.text) for job in jobs)
+                stats["generate_seconds_total"] = stats.get("generate_seconds_total", 0.0) + elapsed
+            for job, result in zip(jobs, results):
+                job.future.set_result(result)
+        except Exception as exc:
+            increment_stat("errors_total")
+            for job in jobs:
+                job.future.set_exception(exc)
+        finally:
+            for _ in jobs:
+                translation_queue.task_done()
 
 
 def submit_translation_jobs(texts: List[str], source: str, target: str) -> List[str]:
     jobs: List[TranslationJob] = []
+    increment_stat("requests_total")
     for text in texts:
         future = concurrent.futures.Future()
-        job = TranslationJob(text=text, source=source, target=target, future=future)
+        job = TranslationJob(text=text, source=source, target=target, future=future, created_at=time.monotonic())
         try:
             translation_queue.put(job, timeout=LOCK_WAIT_SECONDS)
         except queue.Full as exc:
+            increment_stat("queue_full_total")
             raise HTTPException(status_code=503, detail="TranslateGemma queue is full, retry later") from exc
         jobs.append(job)
+    increment_stat("jobs_total", len(jobs))
 
     results: List[str] = []
     for job in jobs:
         try:
             results.append(job.future.result(timeout=QUEUE_RESULT_TIMEOUT_SECONDS))
         except concurrent.futures.TimeoutError as exc:
+            increment_stat("queue_timeout_total")
             raise HTTPException(status_code=503, detail="TranslateGemma queue wait timed out, retry later") from exc
     return results
 
