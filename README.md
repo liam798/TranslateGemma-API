@@ -1,6 +1,6 @@
 # TranslateGemma API
 
-基于 FastAPI、Transformers 和单 GPU 的 TranslateGemma 翻译服务。接口兼容 Google Cloud Translate v2 风格，并额外提供 LibreTranslate 风格的 `/translate` 兼容入口。
+基于 FastAPI、Transformers 和单 GPU 的 TranslateGemma 翻译服务。接口采用 Google Cloud Translate v2 风格。
 
 ## 功能
 
@@ -115,19 +115,6 @@ curl -X POST http://127.0.0.1:8000/language/translate/v2 \
   "source": "en",
   "target": "vi",
   "key": "change-me"
-}
-```
-
-## 兼容接口
-
-POST `/translate`
-
-```json
-{
-  "q": "Hello",
-  "source": "en",
-  "target": "vi",
-  "api_key": "change-me"
 }
 ```
 

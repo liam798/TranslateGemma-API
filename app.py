@@ -54,18 +54,6 @@ MODEL_LANGUAGE_ALIASES: Dict[str, str] = {
 PROTECTED_TOKEN_RE = re.compile(r"(\{\{[^{}\n]{1,80}\}\}|<[^<>\n]{1,80}>|https?://\S+)")
 
 
-class TranslateRequest(BaseModel):
-    q: Optional[Union[str, List[str]]] = Field(None, description="Legacy text field")
-    source: Optional[str] = Field(None, description="Legacy source language code")
-    target: Optional[str] = Field(None, description="Legacy target language code")
-    text: Optional[Union[str, List[str]]] = Field(None, description="CustomAPI text field")
-    from_: Optional[str] = Field(None, alias="from", description="CustomAPI source language code")
-    to: Optional[str] = Field(None, description="CustomAPI target language code")
-    format: str = Field("text", description="Compatibility field")
-    api_key: str = Field("", description="API key")
-    platform: Optional[str] = Field(None, description="Compatibility field")
-
-
 class GoogleTranslateV2Request(BaseModel):
     q: Optional[Union[str, List[str]]] = Field(None, description="Text to translate")
     source: Optional[str] = Field(None, description="Source language code")
@@ -532,23 +520,6 @@ def translate_many(
                 translated[batch_index] = translated_text
 
     return texts, translated, detected_sources
-
-
-@app.post("/translate")
-def translate(req: TranslateRequest) -> Dict[str, object]:
-    require_api_key(req.api_key)
-    raw_texts = req.q if req.q is not None else req.text
-    raw_source = req.source if req.source is not None else req.from_
-    raw_target = req.target if req.target is not None else req.to
-
-    if raw_texts is None:
-        raise HTTPException(status_code=400, detail="Invalid request: missing q or text parameter")
-
-    _, translated, _ = translate_many(raw_texts, raw_source, raw_target)
-
-    if isinstance(raw_texts, list):
-        return {"translatedText": translated}
-    return {"translatedText": translated[0]}
 
 
 @app.post("/language/translate/v2")
