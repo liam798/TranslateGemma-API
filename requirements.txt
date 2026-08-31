@@ -1,0 +1,10 @@
+accelerate
+bitsandbytes
+fastapi
+huggingface_hub
+pillow
+protobuf
+pydantic
+sentencepiece
+transformers
+uvicorn[standard]

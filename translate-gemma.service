@@ -1,0 +1,26 @@
+[Unit]
+Description=TranslateGemma Translation API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/data/translate-gemma
+EnvironmentFile=/data/translate-gemma/translate-gemma.env
+Environment=TOKENIZERS_PARALLELISM=false
+Environment=OMP_NUM_THREADS=4
+Environment=MKL_NUM_THREADS=4
+Environment=TORCHINDUCTOR_COMPILE_THREADS=1
+Environment=PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+Environment=TRANSLATE_GEMMA_MAX_BATCH_SIZE=16
+Environment=TRANSLATE_GEMMA_LONG_BATCH_SIZE=4
+Environment=TRANSLATE_GEMMA_LOCK_WAIT_SECONDS=60
+Environment=TRANSLATE_GEMMA_BATCH_WAIT_SECONDS=0.05
+Environment=TRANSLATE_GEMMA_BATCH_MAX_CHARS=6000
+Environment=TRANSLATE_GEMMA_QUEUE_RESULT_TIMEOUT_SECONDS=180
+ExecStart=/data/translate-gemma/venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
